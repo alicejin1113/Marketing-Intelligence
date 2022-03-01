@@ -1,0 +1,485 @@
+---
+title: "Group Project - GPA Microvan Case"
+author: "Team 29"
+date: "2/21/2022"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r,include=FALSE}
+library(readr)
+#install.packages("corrplot")
+library(corrplot)
+#install.packages("ggplot2")
+library(ggplot2)
+#install.packages("cluster")
+library(cluster)
+#install.packages("textreg")
+library(texreg)
+library(dplyr)
+#install.packages("Hmisc")
+library(Hmisc)
+#install.packages("REdaS")
+library("REdaS")
+#install.packages("psych")
+library("psych")
+#install.packages("FactoMineR")
+library("FactoMineR")
+#install.packages("factoextra")
+library("factoextra")
+#install.packages("plyr")
+library(plyr)
+library("ggpubr")
+library(gmodels)
+```
+
+# Load Data
+```{r echo = FALSE}
+setwd("C:/Users/lenovo/Documents/GitHub/MI Final/")
+microvan_raw <- read_csv("microvan.csv")
+#View(microvan_raw)
+```
+
+# Exploratory Data Analysis
+```{r}
+summary(microvan_raw)
+```
+```{r}
+str(microvan_raw, give.attr = FALSE)
+num_missing <- sum(complete.cases(microvan_raw)) - nrow(microvan_raw)
+print(paste("Our dataset has", num_missing, "missing values"))
+```
+```{r}
+microvan <- microvan_raw[, -1] # Delete 1st column since it is not useful
+```
+## Distribution and Outliers
+### Histograms
+```{r}
+i = 1
+par(mfrow = c(5, 6), mar = c(2,2,2,2))
+for (col in microvan[, -1]) {
+  hist(col, main = colnames(microvan[, -1])[i])
+  i = i + 1
+  }
+```
+### Boxplots
+```{r}
+boxplot(x = as.list(as.data.frame(microvan[, -1])))
+```
+```{r}
+boxplot(x = as.list(microvan[, 1:31]), las = 2)
+# Removed demographics columns to better scale the 30 attributes. Results showed that lthrbetr, homlrgst, envrminr, kidsbulk, passnimp, aftrschl have outliers. So we further plot each of them.
+```
+
+```{r}
+bp_lthrbetr <- boxplot(microvan$lthrbetr)
+length(bp_lthrbetr$out) # 5
+```
+```{r}
+bp_homlrgst <- boxplot(microvan$homlrgst)
+length(bp_homlrgst$out) # 5
+```
+```{r}
+bp_envrminr <- boxplot(microvan$envrminr)
+length(bp_envrminr$out) # 5
+```
+```{r}
+bp_kidsbulk <- boxplot(microvan$kidsbulk)
+length(bp_kidsbulk$out) # 14
+```
+```{r}
+bp_passnimp <- boxplot(microvan$passnimp)
+length(bp_passnimp$out) # 5
+```
+```{r}
+bp_aftrschl <- boxplot(microvan$aftrschl)
+length(bp_aftrschl$out) # 5
+
+# 5-14 outliers out of 400 sample size is the acceptable for us to conduct analysis on a 95% confidence level.
+```
+
+
+
+# Q1 Initial Model
+```{r}
+linear.model.1 <- lm(mvliking ~ ., data = microvan[, 1:31])
+summary(linear.model.1)
+#screenreg(list(linear.model.1))
+```
+## Confounding Variables
+```{r}
+microvan[, -1] %>% cor() %>% corrplot() # Visualize correlation
+multicol <- microvan[, -1] %>% faraway::vif() # Multicollinearity test
+print(multicol[multicol > 5]) # Problematic if greater than 5
+# Turned out kidtrans/ nordtrps/ age/ miles/ numkids/ recycle are subjected to this problem
+```
+## Optimize Features
+```{r}
+linear.model.1.step <- lm(mvliking ~ ., data = microvan[, 1:31])
+step(linear.model.1.step, trace = 0)
+linear.model.step <- lm(formula = mvliking ~ miniboxy + lthrbetr + perfimpt + tkvacatn + 
+                           noparkrm + homlrgst + suvcmpct + carefmny + shdcarpl + strngwrn + twoincom, data = microvan[, 1:31])
+summary(linear.model.step)
+#screenreg(linear.model.step)
+```
+
+
+
+# Q2 Factor Analysis
+## Bartlett's Test of Sphericity
+```{r}
+bart_spher(microvan[,2:31]) # p-value < 2.22e-16, go ahead
+```
+## KMO-test 
+```{r}
+KMO(microvan[,2:31]) # 0.92 > 0.6, it is adequate.
+```
+## Determine the number of factors
+```{r}
+pca <- PCA(microvan[,2:31], scale = TRUE) # Seems to be three dimensions.
+summary(pca)
+pca$eig
+fviz_eig(pca) # Choose 5 as factor numbers
+```
+## Factor solution (varimax rotation)
+```{r}
+fit <- factanal(microvan[,2:31], factors=5, rotation="varimax")
+fit$loadings
+loadings <- as.data.frame(as.table(fit$loadings))
+loadings
+```
+## Heat Map for Factors
+```{r}
+seqPal5<-colorRampPalette(c("black","navyblue","mediumblue","dodgerblue3","aquamarine4","green4","yellowgreen","yellow"))(20)
+as.data.frame(as.table(fit$loadings)) %>%
+  ggplot(aes(Var2, Var1, fill = Freq)) +
+  geom_tile()  +
+  scale_fill_gradientn(name = "loadings", 
+                       colors =seqPal5) +
+  labs( x = "factor", y = 'attribution' )
+```
+## Name Factors
+```{r}
+scores <- factor.scores(microvan[,2:31], fit$loadings)$scores
+microvan$luxury <- scores[,1]
+microvan$size <- scores[,2]
+microvan$kids <- scores[,3]
+microvan$environment <- scores[,4]
+microvan$safety <- scores[,5]
+#View(microvan)
+```
+
+
+
+# Q3 Factor Regression Model
+```{r}
+linear.model.2 <- lm(mvliking ~ .,data = microvan[, c(1, 39:43)])
+summary(linear.model.2) # f3 (kids) & f4 (environment) are insignificant 
+```
+```{r}
+linear.model.3 <- lm(mvliking ~ luxury + size + safety ,data = microvan)
+summary(linear.model.3) # All factors are significant.
+```
+
+
+
+# Q4 Cluster Anlaysis
+# With all factors
+## Determine the number of clusters
+```{r}
+d <- dist(microvan[, 39:43], method = "euclidean")
+```
+## Hierarchical Clustering & Dendrogram 
+```{r}
+hc <- hclust(d, method="ward.D") 
+plot(hc, cex = 0.6, hang = -10, main = "Ward-linkage Cluster Dendrogram") # 3/ 4 might be optimal
+```
+## CH Index
+```{r}
+ch.index = function(x,kmax,iter.max=100,nstart=10,algorithm="Lloyd") {
+  ch = numeric(length=kmax-1)
+    n = nrow(x)
+    for (k in 2:kmax) {
+        a = kmeans(x,k,iter.max=iter.max,nstart=nstart,algorithm=algorithm)
+        w = a$tot.withinss
+        b = a$betweenss
+        ch[k-1] = (b/(k-1))/(w/(n-k))
+        }
+    return(list(k=2:kmax,ch=ch))
+}
+
+ch_index = ch.index(microvan[, 39:43], kmax=10)
+k1.max = ch_index$k[which.max(ch_index$ch)]
+k1 = kmeans(microvan[, 39:43], k1.max, iter.max=100, nstart=10, algorithm="Lloyd")
+plot(ch_index$k,ch_index$ch, xlab='K', ylab='CH(K)', type='b',
+  main='Optimal Number of Clusters' )
+
+# Choose 3 to be the number of clusters
+```
+## Cluster solution
+```{r}
+set.seed(42)
+kmeans.solution.3 <- kmeans(microvan[, 39:43], centers = 3)
+microvan$cluster3 <- kmeans.solution.3$cluster
+kmeans.solution.3$centers
+table(kmeans.solution.3$cluster)
+```
+## Heat Map for Clusters
+```{r}
+as.data.frame(as.table(kmeans.solution.3$centers)) %>%
+  ggplot(aes(Var2, Var1, fill = Freq)) +
+  geom_tile()  +
+  scale_fill_gradientn(name = "center", 
+                       colors =seqPal5) +
+  geom_text(aes(label = round(Freq,2)), 
+            colour = ifelse(as.data.frame(as.table(kmeans.solution.3$centers))$Freq > .5, "black","white" ), 
+            size = 4) +
+  labs( x = "factor", y = 'cluster' )
+```
+## Cluster Plot
+```{r}
+fviz_cluster(kmeans.solution.3, data=microvan[, 39:43])
+```
+
+# With only significant factors
+## Determine the number of clusters
+```{r}
+d1 <- dist(microvan[, c(39, 40, 43)], method = "euclidean")
+```
+## Hierarchical Clustering & Dendrogram 
+```{r}
+hc1 <- hclust(d1, method="ward.D") 
+plot(hc1, cex = 0.6, hang = -10, main = "Ward-linkage Cluster Dendrogram") # 3/4 might be optimal
+```
+## CH Index
+```{r}
+ch.index = function(x,kmax,iter.max=100,nstart=10,algorithm="Lloyd") {
+  ch = numeric(length=kmax-1)
+    n = nrow(x)
+    for (k in 2:kmax) {
+        a = kmeans(x,k,iter.max=iter.max,nstart=nstart,algorithm=algorithm)
+        w = a$tot.withinss
+        b = a$betweenss
+        ch[k-1] = (b/(k-1))/(w/(n-k))
+        }
+    return(list(k=2:kmax,ch=ch))
+}
+
+ch_index_1 = ch.index(microvan[, c(39, 40, 43)], kmax=10)
+k1.max.1 = ch_index_1$k[which.max(ch_index_1$ch)]
+k2 = kmeans(microvan[, c(39, 40, 43)], k1.max.1, iter.max=100, nstart=10, algorithm="Lloyd")
+plot(ch_index_1$k,ch_index_1$ch, xlab='K', ylab='CH(K)', type='b',
+  main='Optimal Number of Clusters' )
+
+# Choose 4 to be the number of clusters
+```
+## Cluster solution
+```{r}
+set.seed(42)
+kmeans.solution.4 <- kmeans(microvan[, c(39, 40, 43)], centers = 4)
+#microvan$cluster4 <- kmeans.solution.4$cluster
+kmeans.solution.4$centers
+table(kmeans.solution.4$cluster)
+```
+## Heat Map for Clusters
+```{r}
+as.data.frame(as.table(kmeans.solution.4$centers)) %>%
+  ggplot(aes(Var2, Var1, fill = Freq)) +
+  geom_tile()  +
+  scale_fill_gradientn(name = "center", 
+                       colors =seqPal5) +
+  geom_text(aes(label = round(Freq,2)), 
+            colour = ifelse(as.data.frame(as.table(kmeans.solution.4$centers))$Freq > .5, "black","white" ), 
+            size = 4) +
+  labs( x = "factor", y = 'cluster' )
+```
+## Cluster Plot
+```{r}
+fviz_cluster(kmeans.solution.4, data=microvan[, c(39, 40, 43)])
+```
+
+## Label the clusters
+```{r}
+microvan$segment.label <- revalue(as.character(microvan$cluster3), c("3"="lifestyle_practicality", "2"="uninvolved", "1"="affluent_size_indifferent"))
+```
+
+
+
+# Q5 Exploring Clusters
+## Option 1 Cluster Regression Model 
+```{r}
+microvan$affluent_size_indifferent <- ifelse(microvan$segment.label == 'affluent_size_indifferent', 1, 0)
+microvan$uninvolved <- ifelse(microvan$segment.label == 'uninvolved', 1, 0)
+microvan$lifestyle_practicality <- ifelse(microvan$segment.label == 'lifestyle_practicality', 1, 0)
+```
+### Base = lifestyle_practicality
+```{r}
+reg.cluster1 <- lm(mvliking ~ affluent_size_indifferent+uninvolved, data = microvan[,c(1,46,47,48)])
+summary(reg.cluster1)
+```
+### Base = uninvolved
+```{r}
+reg.cluster2 <- lm(mvliking ~ affluent_size_indifferent+lifestyle_practicality, data = microvan[,c(1,46,47,48)])
+summary(reg.cluster2)
+```
+### Base = affluent_size_indifferent
+```{r}
+reg.cluster3 <- lm(mvliking ~ uninvolved+lifestyle_practicality, data = microvan[,c(1,46,47,48)])
+summary(reg.cluster3)
+```
+
+## Option 2 T-Tests 
+```{r}
+group_by(microvan, microvan$segment.label) %>%
+  dplyr::summarise(
+    count = n(),
+    mean = mean(mvliking),
+    sd = sd(mvliking)
+  )
+
+ggplot(microvan) +
+  geom_boxplot(aes(segment.label, mvliking, color = segment.label))+
+  labs( x = "segment.label", y = "mvliking")
+```
+### Means between group lifestyle_practicality and group affluent_size_indifferent
+```{r}
+t.test_2_1 <- t.test(mvliking ~ segment.label, data = filter(microvan, segment.label != "uninvolved"))
+t.test_2_1
+```
+### Means between group lifestyle_practicality and group uninvolved
+```{r}
+t.test_2_3 <- t.test(mvliking ~ segment.label, data = filter(microvan, segment.label != "affluent_size_indifferent"))
+t.test_2_3
+```
+### Means between group affluent_size_indifferent and group uninvolved
+```{r}
+t.test_1_3 <- t.test(mvliking ~ segment.label, data = filter(microvan, segment.label != "lifestyle_practicality"))
+t.test_1_3
+```
+
+## Option 3 Cross Tabulation
+```{r}
+CrossTable(microvan$segment.label, microvan$mvliking, expected=TRUE)
+qchisq(0.05, 16, lower.tail = FALSE) #how to calculate the critical value = 26.29
+```
+### Grouping mvliking ("1-3", "4-6", "7-9")
+```{r}
+microvan <- microvan %>% mutate(mvliking_bin = case_when(mvliking >= 1  & mvliking <= 3 ~ '1-3',
+                                                         mvliking >= 4  & mvliking <= 6 ~ '4-6',
+                                                         mvliking >= 7  & mvliking <= 9 ~ '7-9'))
+CrossTable(microvan$segment.label, microvan$mvliking_bin, expected=TRUE)
+```
+
+
+
+# Q6 Demographics 
+```{r} 
+microvan = microvan %>% 
+  mutate(age_group = case_when(
+    between(age, 19, 30)  ~ "19-30",
+    between(age, 31, 40)  ~ "31-40",
+    between(age, 41, 50)  ~ "41-50",
+    between(age, 51, 60)  ~ "51-60"  )
+  ) #Create age groups
+
+microvan = microvan %>% 
+  mutate(income_group = case_when(
+    between(income, 15, 50)  ~ "low",
+    between(income, 51, 90)  ~ "medium",
+    between(income, 91, 150)  ~ "high",
+    between(income, 151, 273)  ~ "very high"  )
+  ) #Create income groups
+
+microvan = microvan %>% 
+  mutate(mvliking_bin = case_when(
+    between(mvliking, 1, 3) ~ '1-3',
+    between(mvliking, 4, 6) ~ '4-6',
+    between(mvliking, 7, 9) ~ '7-9')
+  ) #Create mvliking groups
+
+microvan = microvan %>% 
+  mutate(miles_group = case_when(
+    between(miles, 7, 12) ~ '7-12',
+    between(miles, 13, 18) ~ '13-18',
+    between(miles, 19, 24) ~ '19-24',
+    between(miles, 25, 32) ~ '25-32')
+  ) #Create miles groups
+
+microvan = microvan %>% 
+  mutate(numkids_group = case_when(
+    numkids == 0 ~ 'None',
+    between(numkids, 1, 2) ~ '1-2',
+    between(numkids, 3, 4) ~ '3-4')
+  ) #Create numkids groups
+
+#View(microvan)
+```
+
+```{r}
+CrossTable(microvan$age_group, microvan$mvliking_bin, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+```{r}
+CrossTable(microvan$income_group, microvan$mvliking_bin, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+```{r}
+CrossTable(microvan$numkids_group, microvan$mvliking_bin, expected=TRUE)
+qchisq(0.05, 4, lower.tail = FALSE)
+```
+```{r}
+CrossTable(microvan$female, microvan$mvliking_bin, expected=TRUE)
+qchisq(0.05, 2, lower.tail = FALSE)
+```
+```{r}
+CrossTable(microvan$educ, microvan$mvliking_bin, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+
+```{r}
+CrossTable(microvan$miles_group, microvan$mvliking_bin, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+```{r}
+CrossTable(microvan$recycle, microvan$mvliking_bin, expected=TRUE)
+qchisq(0.05, 8, lower.tail = FALSE)
+```
+
+```{r}
+##Examining age-group for different clusters##
+CrossTable(microvan$segment.label, microvan$age_group, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+```{r}
+##Examining income-group for different clusters##
+CrossTable(microvan$segment.label, microvan$income_group, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+```{r}
+##Examining miles-group for different clusters##
+CrossTable(microvan$segment.label, microvan$miles_group, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+```{r}
+##Examining numkids-group for different clusters##
+CrossTable(microvan$segment.label, microvan$numkids_group, expected=TRUE)
+qchisq(0.05, 4, lower.tail = FALSE)
+```
+```{r}
+##Examining female for different clusters##
+CrossTable(microvan$segment.label, microvan$female, expected=TRUE)
+qchisq(0.05, 2, lower.tail = FALSE)
+```
+```{r}
+##Examining educ for different clusters##
+CrossTable(microvan$segment.label, microvan$educ, expected=TRUE)
+qchisq(0.05, 6, lower.tail = FALSE)
+```
+```{r}
+##Examining recycle for different clusters##
+CrossTable(microvan$segment.label, microvan$recycle, expected=TRUE)
+qchisq(0.05, 8, lower.tail = FALSE)
+```
